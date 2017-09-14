@@ -2,6 +2,20 @@
 Amazon Web Services Guide
 =========================
 
+Overview
+--------
+
+Welcome to the Stark & Wayne Guide to Setup Cloud Foundry on Amazon Web Services.
+This guide shows the method we use to enable customers that want to use the
+open source version of the Cloud Foundry Platform on the Amazon Web Services
+infrastructure.
+
+The process of doing this begins with Terraform.
+
+Terraform will define the internal networks for BOSH and Cloud Foundry to utilize
+and it will provision the necessary initial servers we need to setup a **management
+tier** with BOSH.
+
 Pre-requisites
 --------------
 
@@ -17,16 +31,17 @@ Terraform
 Config and Run
 ~~~~~~~~~~~~~~
 
-1. Clone the codex repository. ``git clone https://github.com/starkandwayne/codex-v2.git``
+1. Clone the codex repository.
 2. From the root of the **codex** folder, cd to ``terraform/aws``.
 3. Make a copy of the example file.
 
 ::
 
-	cp aws.tfvars.example aws.tfvars
+	local $ git clone https://github.com/starkandwayne/codex.git
+	local $ cd terraform/aws
+	local $ cp aws.tfvars.example aws.tfvars
 
-
-4. Open ``aws.tfvars`` in an editor and fill in the required variables at the top.
+4. Open ``aws.tfvars`` in a text-editor and fill in the required variables at the top.
 
 5. From your terminal, run ``make all``.
 
@@ -36,419 +51,67 @@ Output
 Once the Terraform plan has run, it will yield a private network with a public-ip
 address to the bastion host we will use to setup the rest of our systems.
 
-In the last few lines of output look for this:
+At the end of the Terraform output look for the ``box.bastion.public`` to get
+the IP value.
 
 ::
 
-	box.bastion.public = 35.53.126.226
+	Apply complete! Resources: 131 added, 0 changed, 0 destroyed.
+
+	Outputs:
+
+	aws.network.dev-cf-core-0.subnet = subnet-6035fb28
+	aws.network.dev-cf-core-1.subnet = subnet-86c66ee0
+	aws.network.dev-cf-core-2.subnet = subnet-942659cf
+	aws.network.dev-cf-db-0.subnet = subnet-7436f83c
+	aws.network.dev-cf-db-1.subnet = subnet-cfc46ca9
+	aws.network.dev-cf-db-2.subnet = subnet-7d225d26
+
+	...
+
+	aws.rds.dev-cf-db.db_subnet_group = stratus-dev-cf-db
+	aws.rds.prod-cf-db.db_subnet_group = stratus-prod-cf-db
+	aws.rds.staging-cf-db.db_subnet_group = stratus-staging-cf-db
+	box.bastion.public = 34.214.154.71
+	box.nat.public = 34.214.51.112
 
 Jumpbox
 -------
 
-We use a tool called Jumpbox_ to help setup the bastion host.
+Connect as Ubuntu User
+~~~~~~~~~~~~~~~~~~~~~~
+
+We're going to take that IP address and connect to the bastion host.  Another name
+for the bastion host is "jumpbox".  A tool we've written called jumpbox_ helps
+to install common tools to the server.
 
 .. _jumpbox: https://github.com/starkandwayne/jumpbox
 
-The user for the bastion is ``ubuntu``, so with the key-pair we used with Terraform
-and the IP address from the end of the Terraform output, we can build the ssh
-connection string.
-
-Let's connect to the bastion.
+Terraform puts the ssh key-pair specified in ``aws.tfvars`` onto the server
+in provisioning.  And the default server user is is ``ubuntu``.  This makes the
+ssh connection string look like:
 
 ::
 
-	ssh -i /path/to/key-pair.pem ubuntu@35.166.126.226
-
-
-Overview
---------
-
-Welcome to the Stark & Wayne guide to deploying Cloud Foundry on Amazon
-Web Services. This guide provides the steps to create authentication
-credentials, generate the underlying cloud infrastructure, then use
-Terraform to prepare a bastion host.
-
-From this bastion, we setup a special BOSH Director we call the
-**proto-BOSH** server where software like Vault, Concourse, Bolo and
-SHIELD are setup in order to give each of the environments created after
-the **proto-BOSH** key benefits of:
-
--  Secure Credential Storage
--  Pipeline Management
--  Monitoring Framework
--  Backup and Restore Datastores
-
-Once the **proto-BOSH** environment is setup, the child environments
-will have the added benefit of being able to update their BOSH software
-as a release, rather than having to re-initialize with ``bosh-init``.
-
-This also increases the resiliency of all BOSH Directors through
-monitoring and backups with software created by Stark & Wayne's
-engineers.
-
-And visibility into the progress and health of each application,
-release, or package is available through the power of Concourse
-pipelines.
-
-.. image:: /images/levels_of_bosh.png
-   :alt: Levels of Bosh
-
-In the above diagram, BOSH (1) is the **proto-BOSH**, while BOSH (2) and
-BOSH (3) are the per-site BOSH Directors.
-
-Now it's time to setup the credentials.
-
-Setup Credentials
------------------
-
-So you've got an AWS account right? Cause otherwise let me interest you
-in another guide like our OpenStack, Azure or vSphere, etc. j/k
-
-To begin, let's login to `Amazon Web
-Services <https://signin.aws.amazon.com/console>`__ and prepare the
-necessary credentials and resources needed.
-
-1. Access Key ID
-2. Secret Key ID
-3. A Name for your VPC
-4. An EC2 Key Pair
-
-Generate Access Key
-~~~~~~~~~~~~~~~~~~~
-
-The first thing you're going to need is a combination **Access Key ID**
-/ **Secret Key ID**. These are generated (for IAM users) via the IAM
-dashboard.
-
-To help keep things isolated, we're going to set up a brand new IAM
-user. It's a good idea to name this user something like ``cf`` so that
-no one tries to re-purpose it later, and so that it doesn't get deleted.
-
-1. On the AWS web console, access the IAM service, and click on
-   ``Users`` in the sidebar. Then create a new user and select "Generate
-   an access key for each user".
-
-**NOTE**: **Make sure you save the secret key somewhere secure**, like
-1Password or a Vault instance. Amazon will be unable to give you the
-**Secret Key ID** if you misplace it -- your only recourse at that point
-is to generate a new set of keys and start over.
-
-2. Next, find the ``cf`` user and click on the username. This should
-   bring up a summary of the user with things like the *User ARN*,
-   *Groups*, etc. In the bottom half of the Summary panel, you can see
-   some tabs, and one of those tabs is *Permissions*. Click on that one.
-
-3. Now assign the **PowerUserAccess** role to your user. This user will
-   be able to do any operation except IAM operations. You can do this by
-   clicking on the *Permissions* tab and then clicking on the *attach
-   policy* button.
-
-4. We will also need to create a custom user policy in order to create
-   ELBs with SSL listeners. At the same *Permissions* tab, expand the
-   *Inline Policies* and then create one using the *Custom Policy*
-   editor. Name it ``ServerCertificates`` and paste the following
-   content:
-
-   ::
-
-       {
-           "Version": "2012-10-17",
-           "Statement": [
-               {
-                   "Effect": "Allow",
-                   "Action": [
-                       "iam:DeleteServerCertificate",
-                       "iam:UploadServerCertificate",
-                       "iam:ListServerCertificates",
-                       "iam:GetServerCertificate"
-                   ],
-                   "Resource": "*"
-               }
-           ]
-       }
-
-5. Click on *Apply Policy* and you will be all set.
-
-Name Your VPC
-~~~~~~~~~~~~~
-
-This step is really simple -- just make one up. The VPC name will be
-used to prefix certain things that Terraform creates in the AWS Virtual
-Private Cloud. When managing multiple VPC's this can help you to
-sub-select only the ones you're concerned about.
-
-The VPC is configured in Terraform using the ``aws_vpc_name`` variable
-in the ``aws.tfvars`` file we're going to create soon.
-
-::
-
-    aws_vpc_name = "snw"
-
-The prefix of ``snw`` for Stark & Wayne would show up before VPC
-components like Subnets, Network ACLs and Security Groups:
-
-+-------------------+-------------------+
-| Name              | ID                |
-+===================+===================+
-| snw-dev-infra-0   | subnet-cf7812b9   |
-+-------------------+-------------------+
-| snw-hardened      | acl-10feff74      |
-+-------------------+-------------------+
-| snw-dmz           | sg-e0cfcf86       |
-+-------------------+-------------------+
-
-Generate EC2 Key Pair
-~~~~~~~~~~~~~~~~~~~~~
-
-The **Access Key ID** / **Secret Key ID** are used to get access to the
-Amazon Web Services themselves. In order to properly deploy on EC2 over
-SSH, we'll need to create an **EC2 Key Pair**. This will be used as we
-bring up the initial NAT and bastion host instances. And is the SSH key
-you'll use to connect from your local machine to the bastion.
-
-**NOTE**: Make sure you are in the correct region (top-right corner of
-the black menu bar) when you create your **EC2 Key Pair**. Otherwise, it
-just plain won't work. The region name setting can be found in
-``aws.tf`` and the mapping to the region in the menu bar can be found on
-`Amazon Region
-Doc <http://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.RegionsAndAvailabilityZones.html>`__.
-
-1. Starting from the main Amazon Web Console, go to Service > EC2, and
-   then click the *Key Pairs* link under *Network & Security*. Look for
-   the big blue ``Create Key Pair`` button.
-
-2. This downloads a file matching the name of your **EC2 Key Pair**.
-   Example, a key pair named cf-deploy would produce a file named
-   ``cf-deploy.pem`` and be saved to your Downloads folder. Also
-   ``chmod 0600`` the ``*.pem`` file.
-
-3. Decide where you want this file to be. All ``*.pem`` files are
-   ignored in the codex repository. So you can either move this file to
-   the same folder as ``CODEX_ROOT/terraform/aws`` or move it to a place
-   you keep SSH keys and use the full path to the ``*.pem`` file in your
-   ``aws.tfvars`` for the ``aws_key_file`` variable name.
-
-::
-
-    aws_key_file = /Users/<username>/.ssh/cf-deploy.pem
-
-Use Terraform
--------------
-
-Once the requirements for AWS are met, we can put it all together and
-build out your shiny new Virtual Private Cloud (VPC), NAT server and
-bastion host. Change to the ``terraform/aws`` sub-directory of this
-repository before we begin.
-
-The configuration directly matches the `Network
-Plan <https://github.com/starkandwayne/codex/blob/master/network.md>`__
-for the demo environment. When deploying in other environments like
-production, some tweaks or rewrites may need to be made.
-
-Variable File
-~~~~~~~~~~~~~
-
-Create a ``aws.tfvars`` file with the following configurations
-(substituting your actual values) all the other configurations have
-default setting in the ``CODEX_ROOT/terraform/aws/aws.tf`` file.
-
-::
-
-    aws_access_key = "..."
-    aws_secret_key = "..."
-    aws_vpc_name   = "snw"
-    aws_key_name   = "cf-deploy"
-    aws_key_file   = "/Users/<username/.ssh/cf-deploy.pem"
-
-If you need to change the region or subnet, you can override the
-defaults by adding:
-
-::
-
-    aws_region     = "us-east-1"
-    network        = "10.42"
-
-Also, be advised: Depending on the state of your AWS account, you may
-also need to explicitly list the AWS Availability Zones as follows:
-
-::
-
-    aws_az1        = "a"
-    aws_az2        = "c"
-    aws_az3        = "d"
-
-Otherwise, you may get the following error:
-
-::
-
-     * aws_subnet.dev-cf-edge-1: Error creating subnet: InvalidParameterValue: Value (us-east-1b) for parameter availabilityZone is invalid. Subnets can currently only be created in the following availability zones: us-east-1c, us-east-1d, us-east-1e, us-east-1a.
-        status code: 400, request id:
-
-You may change some default settings according to the real cases you are
-working on. For example, you can change ``instance_type`` (default is
-t2.small) in ``aws.tf`` to large size if the bastion would require a
-high workload.
-
-Production Considerations
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-When considering production availability. We recommend `a region with
-three availability
-zones <http://aws.amazon.com/about-aws/global-infrastructure/>`__ for
-best HA results. Vault requires at least three zones. Please feel free
-to list any other software that requires more than two zones for HA.
-
-Build Resources
-~~~~~~~~~~~~~~~
-
-As a quick pre-flight check, run ``make manifest`` to compile your
-Terraform plan and suss out any issues with naming, missing variables,
-configuration, etc.:
-
-::
-
-    $ make manifest
-    terraform get -update
-    terraform plan -var-file aws.tfvars -out aws.tfplan
-    Refreshing Terraform state prior to plan...
-
-    <snip>
-
-    Plan: 129 to add, 0 to change, 0 to destroy.
-
-If everything worked out you should see a summary of the plan. If this
-is the first time you've done this, all of your changes should be
-additions. The numbers may differ from the above output, and that's
-okay.
-
-Now, to pull the trigger, run ``make deploy``:
-
-::
-
-    $ make deploy
-
-Terraform will connect to AWS, using your **Access Key ID** and **Secret
-Key ID**, and spin up all the things it needs. When it finishes, you
-should be left with a bunch of subnets, configured network ACLs,
-security groups, routing tables, a NAT instance (for public internet
-connectivity) and a bastion host.
-
-If you run into issues before this point refer to our
-`troubleshooting <troubleshooting.md>`__ doc for help.
-
-Automate Build and Teardown
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-When working with development environments only, there are options built
-into Terraform that will allow you to configure additional variables and
-then run a script that will automatically create or destroy the base
-Terraform environment for you (a NAT server and a bastion host). This
-allows us to help reduce runtime cost.
-
-Setup the variables of what time (in military time) that you'd like the
-script's time range to monitor.
-
-::
-
-    startup = "9"
-    shutdown = "17"
-
-With the ``startup`` and ``shutdown`` variables configured in the
-``aws.tfvars`` file, you can then return to the
-``CODEX_ROOT/terraform/aws`` folder and run:
-
--  ``make aws-watch``
--  ``make aws-stopwatch``
-
-The first starts the background process that will be checking if it's
-time to begin the teardown. The second will shutdown the background
-process.
-
-Bastion Host
-------------
-
-The bastion host is the server the BOSH operator connects to, in order
-to perform commands that affect the **proto-BOSH** Director and the
-software that gets deployed by it.
-
-We'll be covering the configuration and deployment of each of these
-software step-by-step as we go along. By the time you're done working on
-the bastion server, you'll have installed each of the following in the
-numbered order:
-
-.. image:: /images/bastion_host_overview.png
-   :alt: Bastion Host Overview
-
-Public IP Address
-~~~~~~~~~~~~~~~~~
-
-Before we can begin to install software, we need to connect to the
-server. There are a couple of ways to get the IP address.
-
--  At the end of the Terraform ``make deploy`` output the bastion
-   address is displayed.
-
-::
-
-    box.bastion.public    = 52.43.51.197
-    box.nat.public        = 52.41.225.204
-
--  In the AWS Console, go to Services > EC2. In the dashboard each of
-   the **Resources** are listed. Find the *Running Instances* click on
-   it and locate the bastion. The *Public IP* is an attribute in the
-   *Description* tab.
-
-Connect to Bastion
-~~~~~~~~~~~~~~~~~~
-
-You'll use the **EC2 Key Pair** ``*.pem`` file that was stored from the
-`Generate EC2 Key Pair <aws.md#generate-ec2-key-pair>`__ step before as
-your credential to connect.
-
-In forming the SSH connection command, use the ``-i`` flag to give SSH
-the path to the ``IdentityFile``. The default user on the bastion server
-is ``ubuntu``. This will change in a little bit though when we create a
-new user, so don't get too comfy.
-
-::
-
-    $ ssh -i ~/.ssh/cf-deploy.pem ubuntu@52.43.51.197
-
-Problems connecting? `Verify your SSH
-fingerprint <https://github.com/starkandwayne/codex/blob/master/troubleshooting.md#verify-keypair>`__
-in the troubleshooting doc.
+	ssh -i /path/to/key-pair.pem ubuntu@34.214.154.71
 
 Add User
 ~~~~~~~~
 
-Once on the bastion host, you'll want to use the ``jumpbox`` script,
-which has been installed automatically by the Terraform configuration.
-`This script installs <https://github.com/starkandwayne/jumpbox>`__ some
-useful utilities like ``jq``, ``spruce``, ``safe``, and ``genesis`` all
-of which will be important when we start using the bastion host to do
-deployments.
+.. tip:: This is the reason why we add the user.
 
-**NOTE**: Try not to confuse the ``jumpbox`` script with the jumpbox
-*BOSH release*. The *BOSH release* can be used as part of a deployment.
-And the script gets run directly on the bastion host.
+Jumpbox installs:
 
-Once connected to the bastion, check if the ``jumpbox`` utility is
-installed.
+- one
+- two
+- three
+
+Once connected to the bastion, check if the ``jumpbox`` utility is installed.
 
 ::
 
     $ jumpbox -v
-    jumpbox v49
-
-In order to have the dependencies for the ``bosh_cli`` we need to create
-a user. Also a convenience method at the end will prompt for git
-configuration that will be useful when we are generating Genesis
-templates later.
-
-Also, using named accounts provides auditing (via the ``sudo`` logs),
-and isolation (people won't step on each others toes on the filesystem)
-and customization (everyone gets to set their own prompt / shell /
-``$EDITOR``).
+    jumpbox v50
 
 Let's add a user with ``jumpbox useradd``:
 
@@ -465,11 +128,11 @@ Let's add a user with ``jumpbox useradd``:
 Setup User
 ~~~~~~~~~~
 
-After you've added the user, **be sure you follow up and setup the
-user** before going any further.
+After you've added the user, **be sure you follow up and setup the user** before
+going any further.
 
-Use the ``su - juser`` command to switch to the user. And run
-``jumpbox user`` to install all dependent packages.
+Use the ``su - juser`` command to switch to the user. And run ``jumpbox user``
+to install all dependent packages.
 
 ::
 

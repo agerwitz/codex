@@ -1,9 +1,6 @@
 # Mac Desktop Services Store file
 .DS_Store
 
-# created by python virtualenv
-.direnv
-
 # do not commit the build folder, is compiled upon changes
 build
 
@@ -20,3 +17,7 @@ properties.yml
 
 # SSH key file
 bosh.pem
+
+#IntelliJ
+.idea
+*.iml

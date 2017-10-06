@@ -25,8 +25,6 @@ Write
 
 .. _docker: https://www.docker.com/
 
-.. image:: docs/images/codex-local-setup.gif
-
 About
 -----
 
@@ -42,8 +40,6 @@ About
 | terraform/       | **terraform** provisioning scripts                  |
 +------------------+-----------------------------------------------------+
 | .cfignore        | **cf** optimize deployment parameters               |
-+------------------+-----------------------------------------------------+
-| .envrc           | **direnv** builds a python virtual env              |
 +------------------+-----------------------------------------------------+
 | .gitignore       | **git** defines files to ignore in repo             |
 +------------------+-----------------------------------------------------+
